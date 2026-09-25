@@ -1,0 +1,81 @@
+# 部署 SchemaAI 展示站到组织站点根路径。
+#
+# 本仓是**部署壳**：站点源码不在这里 —— workflow 拉取公开的 schemaai-labs/showcase，
+# 构建后发布到 GitHub Pages。站点因此落在根路径 https://schemaai-labs.github.io/，
+# 站内写死的绝对资源路径（/exhibits/...）天然成立，无需为子路径做 base 适配。
+#
+# 不需要任何 secrets：showcase 是公开仓，checkout 无需凭据。
+
+name: Deploy showcase
+
+on:
+  # 手动触发（主路径 —— 展示站更新不频繁）
+  workflow_dispatch:
+
+  # 每周一 04:23 UTC 兜底重跑一次（依赖漂移 / 上游修复）
+  schedule:
+    - cron: '23 4 * * 1'
+
+  # 可选：让 showcase 仓 push 后即时部署。
+  # 需在 showcase 仓加一个 workflow，用 PAT（或 GitHub App token）POST：
+  #   gh api repos/schemaai-labs/schemaai-labs.github.io/dispatches \
+  #      -f event_type=showcase-updated
+  # 未配置该 token 时这条触发不会发生，其余触发路径不受影响。
+  repository_dispatch:
+    types: [showcase-updated]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 同时只允许一次 Pages 部署；不取消进行中的（避免站点半更新）
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout showcase
+        uses: actions/checkout@v4
+        with:
+          repository: schemaai-labs/showcase
+          ref: main
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # showcase 仓未提交 lockfile（单包项目，版本锁定在 package.json 的范围里）
+      - name: Install
+        run: pnpm install
+
+      - name: Build
+        run: pnpm build
+
+      # SPA 深链兜底：展示站走 path 路由（/preview/<id>），GitHub Pages 无服务端 fallback。
+      # 根路径部署 + 绝对资源路径 ⇒ 任意深链都落到这份副本，由前端路由接管。
+      - name: SPA fallback
+        run: cp dist/index.html dist/404.html
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
